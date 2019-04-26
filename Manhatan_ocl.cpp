@@ -3,7 +3,8 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <string.h>
-#include <CL/cl.h>
+#include "include/utils_cl.h"
+
 
 void initialize(int *m,int t,int maximo)
 {
@@ -87,7 +88,9 @@ int ObtenerParametros(int argc, char *argv[], int *debug, int *num_workitems, in
 
 typedef struct {
 	cl_platform_id *plataformas;
-	cl_device_id *dispositivos;
+	cl_device_id **dispositivos;
+	cl_uint num_platforms;
+	cl_uint *num_devices;
 	cl_context contexto;
 	cl_command_queue cola;
 	cl_program programa;
@@ -95,50 +98,68 @@ typedef struct {
 } EntornoOCL_t;
 
 // **************************************************************************
-// ***************************** IMPLEMENTACIÓN *****************************
+// ***************************** IMPLEMENTACIï¿½N *****************************
 // **************************************************************************
 cl_int InicializarEntornoOCL(EntornoOCL_t *entorno) {
 
+	ObtenerPlataformas(entorno->plataformas, entorno->num_platforms);
+	entorno->dispositivos = (cl_device_id**)malloc(entorno->num_platforms*sizeof(cl_device_id*));
+	entorno->num_devices = (cl_uint*)malloc(entorno->num_platforms * sizeof(cl_uint));
+	for (int i = 0; i < entorno->num_platforms; i++){
+		ObtenerDispositivos(entorno->plataformas[i], CL_DEVICE_TYPE_ALL, entorno->dispositivos[i], entorno->num_devices[i]);
+	}
+
+	CrearContexto(entorno->plataformas[0], entorno->dispositivos[0], entorno->num_devices[0], entorno->contexto);
+	CrearCola(entorno->contexto, entorno->dispositivos[0][0], CL_QUEUE_PROFILING_ENABLE, entorno->cola);
+
+
+	CrearPrograma(entorno->programa, entorno->contexto, entorno->num_devices[0], entorno->dispositivos[0], "", "kernel.cl");
+	CrearKernel(entorno->kernel, entorno->programa, "mult_vec2");
 }
 
 cl_int LiberarEntornoOCL(EntornoOCL_t *entorno) {
+	free(entorno->plataformas);
+	free(entorno->num_devices);
 
+	for (int i = 0; i < entorno->num_platforms; i++)
+		free(entorno->dispositivos[i]);
+	free(entorno->dispositivos);
 }
 
 /*
-N -> Tamaño de la matriz A (NxN)
+N -> Tamaï¿½o de la matriz A (NxN)
 A -> Matriz
 n -> Cantidad de enteros contenidos en numeros
-numeros -> Lista de números de los que se buscarán las distancias
-distancias -> Resultado con las distancias (un resultado por número)
+numeros -> Lista de nï¿½meros de los que se buscarï¿½n las distancias
+distancias -> Resultado con las distancias (un resultado por nï¿½mero)
 entorno -> Entorno OpenCL
 */
 void ocl(int N,int *A,int n,int *numeros,int *distancias, EntornoOCL_t entorno) {
 
 }
 // **************************************************************************
-// *************************** FIN IMPLEMENTACIÓN ***************************
+// *************************** FIN IMPLEMENTACIï¿½N ***************************
 // **************************************************************************
 
 /*
-Recibirá los siguientes parámetros (los parámetros entre corchetes son opcionales): fichEntrada [-d] [-wi work_items] [-wi_wg workitems_por_workgroup]
-fichEntrada -> Obligatorio. Fichero de entrada con los parámetros de lanzamiento de los experimentos
--d -> Opcional. Si se indica, se mostrarán por pantalla los valores iniciales, finales y tiempo de cada experimento
--wi work_items -> Opcional. Si se indica, se lanzarán tantos work items como se indique en work_items (para OpenCL)
--wi_wg workitems_por_workgroup -> Opcional. Si se indica, se lanzarán tantos work items en cada work group como se indique en WorkItems_por_WorkGroup (para OpenCL)
+Recibirï¿½ los siguientes parï¿½metros (los parï¿½metros entre corchetes son opcionales): fichEntrada [-d] [-wi work_items] [-wi_wg workitems_por_workgroup]
+fichEntrada -> Obligatorio. Fichero de entrada con los parï¿½metros de lanzamiento de los experimentos
+-d -> Opcional. Si se indica, se mostrarï¿½n por pantalla los valores iniciales, finales y tiempo de cada experimento
+-wi work_items -> Opcional. Si se indica, se lanzarï¿½n tantos work items como se indique en work_items (para OpenCL)
+-wi_wg workitems_por_workgroup -> Opcional. Si se indica, se lanzarï¿½n tantos work items en cada work group como se indique en WorkItems_por_WorkGroup (para OpenCL)
 */
 int main(int argc,char *argv[]) {
 	int i,j,
 		debug=0,				   // Indica si se desean mostrar los tiempos y resultados parciales de los experimentos
-		num_workitems=0, 		   // Número de work items que se utilizarán
-		workitems_por_workgroups=0, // Número de work items por cada work group que se utilizarán
-		N,					   // Tamaño de la matriz A (NxN)
-		cuantos,				   // Número de experimentos
-		n,					   // Número de enteros a leer del fichero
-		semilla,				   // Semilla para la generación de números aleatorios
-		maximo,				   // Valor máximo de para la generación de valores aleatorios de la matriz A (se generan entre 0 y maximo-1)
+		num_workitems=0, 		   // Nï¿½mero de work items que se utilizarï¿½n
+		workitems_por_workgroups=0, // Nï¿½mero de work items por cada work group que se utilizarï¿½n
+		N,					   // Tamaï¿½o de la matriz A (NxN)
+		cuantos,				   // Nï¿½mero de experimentos
+		n,					   // Nï¿½mero de enteros a leer del fichero
+		semilla,				   // Semilla para la generaciï¿½n de nï¿½meros aleatorios
+		maximo,				   // Valor mï¿½ximo de para la generaciï¿½n de valores aleatorios de la matriz A (se generan entre 0 y maximo-1)
 		*A,					   // Matriz A. Se representa en forma de vector. Para acceder a la fila f y la columna c: A[f*N+c]
-		*numeros,				   // Vector que contiene los números de los que se calcularán las distancias
+		*numeros,				   // Vector que contiene los nï¿½meros de los que se calcularï¿½n las distancias
 		*distancias;			   // Vector resultado conteniendo las distancias calculadas
 	long long ti,				   // Tiempo inicial
 			tf,				   // Tiempo final
@@ -147,28 +168,28 @@ int main(int argc,char *argv[]) {
 	EntornoOCL_t entorno; 		   //Entorno para el control de OpenCL
 
 	if (!ObtenerParametros(argc, argv, &debug, &num_workitems, &workitems_por_workgroups)) {
-		printf("Ejecución incorrecta\nEl formato correcto es %s fichEntrada [-d] [-wi work_items] [-wi_wg workitems_por_workgroup]\n", argv[0]);
+		printf("Ejecuciï¿½n incorrecta\nEl formato correcto es %s fichEntrada [-d] [-wi work_items] [-wi_wg workitems_por_workgroup]\n", argv[0]);
 		return 0;
 	}
 	
 	InicializarEntornoOCL(&entorno);
 
-	// Se leen el número de experimentos a realizar
+	// Se leen el nï¿½mero de experimentos a realizar
 	f=fopen(argv[1],"r");
 	fscanf(f, "%d",&cuantos);
 
 	for(i=0;i<cuantos;i++)
 	{
 		//Por cada experimento se leen
-		fscanf(f, "%d",&N);			//El tamaño de la matriz (NxN)
-		fscanf(f, "%d",&semilla);	//La semilla para la generación de números aleatorios
-		fscanf(f, "%d",&maximo);		//El valor máximo de para la generación de valores aleatorios de la matriz A (se generan entre 0 y maximo-1)
-		fscanf(f, "%d",&n);			//El número de enteros a leer del fichero
-		//Reserva de memoria para la matriz, las distancias y los números
+		fscanf(f, "%d",&N);			//El tamaï¿½o de la matriz (NxN)
+		fscanf(f, "%d",&semilla);	//La semilla para la generaciï¿½n de nï¿½meros aleatorios
+		fscanf(f, "%d",&maximo);		//El valor mï¿½ximo de para la generaciï¿½n de valores aleatorios de la matriz A (se generan entre 0 y maximo-1)
+		fscanf(f, "%d",&n);			//El nï¿½mero de enteros a leer del fichero
+		//Reserva de memoria para la matriz, las distancias y los nï¿½meros
 		A = (int *) malloc(sizeof(int)*N*N);
 		distancias=(int *) malloc(sizeof(int)*n);
 		numeros = (int *) malloc(sizeof(int)*n);
-		//Lectura de los números
+		//Lectura de los nï¿½meros
 		for(j=0;j<n;j++) {
 			fscanf(f, "%d",&numeros[j]);
 		}
@@ -178,7 +199,7 @@ int main(int argc,char *argv[]) {
 
 		if (debug)	{
 			printf("Matriz del experimento %d:\n", i); escribir(A,N);
-			printf("Números del experimento %d:\n", i);escribirresult(numeros,n);
+			printf("Nï¿½meros del experimento %d:\n", i);escribirresult(numeros,n);
 		}
    
 		ti=mseconds(); 
