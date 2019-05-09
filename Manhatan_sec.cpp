@@ -74,6 +74,7 @@ n -> Cantidad de enteros contenidos en numeros
 numeros -> Lista de n�meros de los que se buscar�n las distancias
 distancias -> Resultado con las distancias (un resultado por n�mero)
 */
+
 void sec(int N,int *A,int n,int *numeros,int *distancias) {
 	for (int num = 0; num < n; num++){
 		int seek = numeros[num];
@@ -98,6 +99,7 @@ void sec(int N,int *A,int n,int *numeros,int *distancias) {
 		distancias[num] = max;
 	}
 }
+
 // **************************************************************************
 // *************************** FIN IMPLEMENTACI�N ***************************
 // **************************************************************************

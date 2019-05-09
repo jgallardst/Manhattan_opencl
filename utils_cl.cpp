@@ -256,7 +256,7 @@ cl_int ObtenerTiempoEjecucionEntreEventos(cl_event event_ini, cl_event event_fin
 	tiempo = fin - ini;
 	return CL_SUCCESS;
 }
-
+/**
 int main(int argc, char** argv){
 	cl_platform_id *platforms;
 	cl_uint num_platforms;
@@ -321,3 +321,4 @@ int main(int argc, char** argv){
 	return 0;
 }
 
+**/

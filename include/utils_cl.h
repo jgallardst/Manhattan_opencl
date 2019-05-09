@@ -2,7 +2,7 @@
 #define UTILS_CL_H
 
 #include <CL/cl.h>
-#include "include/LeerFuente.h"
+#include "LeerFuente.h"
 
 cl_int ObtenerTiempoEjecucionEntreEventos(cl_event event_ini,cl_event event_fin,cl_ulong&tiempo);
 cl_int ObtenerTiempoEjecucionEvento(cl_event event,cl_ulong&tiempo);
