@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <string.h>
 #include "include/utils_cl.h"
-
+#include <math.h>
 
 void initialize(int *m,int t,int maximo)
 {
@@ -147,11 +147,19 @@ void ocl(int N,int *A,int n,int *numeros,int *distancias, EntornoOCL_t entorno) 
 		cl_event e_ejec_countAppareances, e_ejec_get, e_ejec_tam, e_ejec_mejores;
 
 		size_t wi =  N*N;
-		size_t wi_x_wg = N;
+		size_t wi_x_wg = 4096;
 		size_t matrixSize = N*N*sizeof(int);
 
-		size_t wg = (wi / wi_x_wg);
-		
+		size_t wg =  ceil(wi * 1.0 / wi_x_wg);
+
+		size_t real_wi = (wg * wi_x_wg);
+
+		if(wi < wi_x_wg){
+			wi_x_wg = N;
+			real_wi = N*N;
+			wg = N;
+		}
+
 		size_t app_per_wg_size =  wg * sizeof(int);
 		int* app_per_wg = (int*) malloc(app_per_wg_size);
 		int *data_per_wg;
@@ -163,12 +171,12 @@ void ocl(int N,int *A,int n,int *numeros,int *distancias, EntornoOCL_t entorno) 
 		CrearBuffer(entorno.contexto, CL_MEM_USE_HOST_PTR, app_per_wg_size, app_per_wg, app_buffer);
 
 		AsignarParametro (entorno.kernelCount, 0, sizeof(int), &numeros[num]);
-		AsignarParametro (entorno.kernelCount, 1, sizeof(cl_mem), &A_buffer);
-		AsignarParametro (entorno.kernelCount, 2, sizeof(cl_mem), &app_buffer);
+		AsignarParametro (entorno.kernelCount, 1, sizeof(size_t), &wi);
+		AsignarParametro (entorno.kernelCount, 2, sizeof(cl_mem), &A_buffer);
+		AsignarParametro (entorno.kernelCount, 3, sizeof(cl_mem), &app_buffer);
 
-		EjecutarKernel(entorno.cola, entorno.kernelCount, 1, NULL, &wi, &wi_x_wg, 0, NULL, e_ejec_countAppareances);
+		EjecutarKernel(entorno.cola, entorno.kernelCount, 1, NULL, &real_wi, &wi_x_wg, 0, NULL, e_ejec_countAppareances);
 		clFinish(entorno.cola);
-
 
 		cl_mem data_buffer, total_buffer;
 
@@ -186,11 +194,12 @@ void ocl(int N,int *A,int n,int *numeros,int *distancias, EntornoOCL_t entorno) 
 		CrearBuffer(entorno.contexto, CL_MEM_USE_HOST_PTR, total_data_size, data_per_wg, data_buffer);
 
 		AsignarParametro (entorno.kernelGet, 0, sizeof(int), &numeros[num]);
-		AsignarParametro (entorno.kernelGet, 1, sizeof(cl_mem), &A_buffer);
-		AsignarParametro (entorno.kernelGet, 2, sizeof(cl_mem), &app_buffer);
-		AsignarParametro (entorno.kernelGet, 3, sizeof(cl_mem), &data_buffer);
+		AsignarParametro (entorno.kernelGet, 1, sizeof(size_t), &wi);
+		AsignarParametro (entorno.kernelGet, 2, sizeof(cl_mem), &A_buffer);
+		AsignarParametro (entorno.kernelGet, 3, sizeof(cl_mem), &app_buffer);
+		AsignarParametro (entorno.kernelGet, 4, sizeof(cl_mem), &data_buffer);
 
-		EjecutarKernel(entorno.cola, entorno.kernelGet, 1, NULL, &wi, &wi_x_wg, 0, NULL, e_ejec_get);
+		EjecutarKernel(entorno.cola, entorno.kernelGet, 1, NULL, &real_wi, &wi_x_wg, 0, NULL, e_ejec_get);
 		clFinish(entorno.cola);
 
 
@@ -211,7 +220,7 @@ void ocl(int N,int *A,int n,int *numeros,int *distancias, EntornoOCL_t entorno) 
 			EjecutarKernel(entorno.cola, entorno.kernelMej, 1, NULL, &mej_wg, &mej_wg, 0, NULL, e_ejec_mejores);
 			clFinish(entorno.cola);
 		} else {
-			size_t mejores_wg = total_data_size / mejor_wg_size;
+			size_t mejores_wg = ceil(total_data_size * 1.0 / mejor_wg_size);
 			size_t w_total = mejores_wg * mejor_wg_size;
 			size_t mejores_size = sizeof(int) * mejores_wg;
 			int* mejores = (int*) malloc(mejores_size);
@@ -225,12 +234,9 @@ void ocl(int N,int *A,int n,int *numeros,int *distancias, EntornoOCL_t entorno) 
 			EjecutarKernel(entorno.cola, entorno.kernelMej, 1, NULL, &w_total, &mejor_wg_size, 0, NULL, e_ejec_mejores);
 			clFinish(entorno.cola);
 
-			for (int i = 0; i < mejores_wg; i++){
+			for (int i = 0; i < mejores_wg ; i++){
 				if(mejor < mejores[i]) mejor = mejores[i];
 			}
-
-
-
 		}
 
 		distancias[num] = mejor;

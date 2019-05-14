@@ -1,4 +1,4 @@
-__kernel void countAppareances(int n, __global int* A, __global int* appereances)
+__kernel void countAppareances(int n, size_t tot, __global int* A, __global int* appereances)
 {  
     __local int wg_app; 
 
@@ -7,8 +7,11 @@ __kernel void countAppareances(int n, __global int* A, __global int* appereances
   int gid = get_group_id(0);
   if(lid == 0) wg_app = 0;
   
-  if(A[id] == n){
-    atomic_inc(&wg_app);
+  if(id < tot ){
+
+    if(A[id] == n){
+      atomic_inc(&wg_app);
+    }
   }
 
   barrier(CLK_LOCAL_MEM_FENCE);
@@ -22,7 +25,7 @@ __kernel void getSize(__global int* appereances, __global int* total){
   atomic_add(total, appereances[get_global_id(0)]);
 }
 
-__kernel void getData(int n, __global int* A,  __global int* appereances, __global int* data)
+__kernel void getData(int n, size_t tot, __global int* A,  __global int* appereances, __global int* data)
 {  
 
   int id = get_global_id(0);
@@ -31,20 +34,25 @@ __kernel void getData(int n, __global int* A,  __global int* appereances, __glob
   int s = get_local_size(0);
   __local int index;
 
-  if(gid == 0) {
-    index = 0;
-  } else {
-    index = 0;
-    for(int i = 0; i < gid; i++){
-      index += appereances[i];
-    }
-  }
+  if(id < tot){
 
-  if(lid == 0){
-    for (int i = 0; i < s; i ++){
-      if(A[id+i] == n){
-          data[index] = id+i;
-          index++;
+    if(gid == 0) {
+      index = 0;
+    } else {
+      index = 0;
+      for(int i = 0; i < gid; i++){
+        index += appereances[i];
+      }
+    }
+
+    if(lid == 0){
+      for (int i = 0; i < s; i ++){
+        if(id + i < tot){
+          if(A[id+i] == n){
+              data[index] = id+i;
+              index++;
+          }
+        }
       }
     }
   }
