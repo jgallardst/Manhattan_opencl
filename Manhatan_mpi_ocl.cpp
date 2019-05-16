@@ -5,6 +5,8 @@
 #include <string.h>
 #include <CL/cl.h>
 #include <mpi.h>
+#include "include/utils_cl.h"
+#include <math.h>
 
 void initialize(int *m,int t,int maximo)
 {
@@ -88,61 +90,206 @@ int ObtenerParametros(int argc, char *argv[], int *debug, int *num_workitems, in
 
 typedef struct {
 	cl_platform_id *plataformas;
-	cl_device_id *dispositivos;
+	cl_device_id **dispositivos;
+	cl_uint num_platforms;
+	cl_uint *num_devices;
 	cl_context contexto;
 	cl_command_queue cola;
 	cl_program programa;
-	cl_kernel kernel;
+	cl_kernel kernelCount;
+	cl_kernel kernelGet;
+	cl_kernel kernelTam;
+	cl_kernel kernelMej;
 } EntornoOCL_t;
 
 // **************************************************************************
-// ***************************** IMPLEMENTACIÓN *****************************
+// ***************************** IMPLEMENTACIï¿½N *****************************
 // **************************************************************************
 cl_int InicializarEntornoOCL(EntornoOCL_t *entorno) {
+
+	ObtenerPlataformas(entorno->plataformas, entorno->num_platforms);
+	entorno->dispositivos = (cl_device_id**)malloc(entorno->num_platforms*sizeof(cl_device_id*));
+	entorno->num_devices = (cl_uint*)malloc(entorno->num_platforms * sizeof(cl_uint));
+	for (int i = 0; i < entorno->num_platforms; i++){
+		ObtenerDispositivos(entorno->plataformas[i], CL_DEVICE_TYPE_ALL, entorno->dispositivos[i], entorno->num_devices[i]);
+	}
+
+	CrearContexto(entorno->plataformas[0], entorno->dispositivos[0], entorno->num_devices[0], entorno->contexto);
+	CrearCola(entorno->contexto, entorno->dispositivos[0][0], CL_QUEUE_PROFILING_ENABLE, entorno->cola);
+
+
+	CrearPrograma(entorno->programa, entorno->contexto, entorno->num_devices[0], entorno->dispositivos[0], "", "kernel.cl");
+	CrearKernel(entorno->kernelCount, entorno->programa, "countAppareances");
+	CrearKernel(entorno->kernelGet, entorno->programa, "getData");
+	CrearKernel(entorno->kernelTam, entorno->programa, "getSize");
+	CrearKernel(entorno->kernelMej, entorno->programa, "mejores");
 
 }
 
 cl_int LiberarEntornoOCL(EntornoOCL_t *entorno) {
+	free(entorno->plataformas);
+	free(entorno->num_devices);
 
+	for (int i = 0; i < entorno->num_platforms; i++)
+		free(entorno->dispositivos[i]);
+	free(entorno->dispositivos);
 }
 
 /*
-N -> Tamaño de la matriz A (NxN)
+N -> Tamaï¿½o de la matriz A (NxN)
 A -> Matriz
 n -> Cantidad de enteros contenidos en numeros
-numeros -> Lista de números de los que se buscarán las distancias
-distancias -> Resultado con las distancias (un resultado por número)
+numeros -> Lista de nï¿½meros de los que se buscarï¿½n las distancias
+distancias -> Resultado con las distancias (un resultado por nï¿½mero)
 entorno -> Entorno OpenCL
 */
 void ocl(int N,int *A,int n,int *numeros,int *distancias, EntornoOCL_t entorno) {
+	int size, myrank;
+	MPI_Comm_rank(MPI_COMM_WORLD,&myrank);
+  	MPI_Comm_size(MPI_COMM_WORLD,&size);
+	for(int num = 0; num < n; num++){
+		int worker  = (num % (size - 1)) +1;
+		if(myrank == worker){
+			cl_mem A_buffer, app_buffer;
+			cl_event e_ejec_countAppareances, e_ejec_get, e_ejec_tam, e_ejec_mejores;
+
+			size_t wi =  N*N;
+			size_t wi_x_wg = 4096;
+			size_t matrixSize = N*N*sizeof(int);
+
+			size_t wg =  ceil(wi * 1.0 / wi_x_wg);
+
+			size_t real_wi = (wg * wi_x_wg);
+
+			if(wi < wi_x_wg){
+				wi_x_wg = N;
+				real_wi = N*N;
+				wg = N;
+			}
+
+			size_t app_per_wg_size =  wg * sizeof(int);
+			int* app_per_wg = (int*) malloc(app_per_wg_size);
+			int *data_per_wg;
+
+			int total_data_size = 0;
+
+			
+			CrearBuffer(entorno.contexto, CL_MEM_USE_HOST_PTR, matrixSize, A, A_buffer);
+			CrearBuffer(entorno.contexto, CL_MEM_USE_HOST_PTR, app_per_wg_size, app_per_wg, app_buffer);
+
+			AsignarParametro (entorno.kernelCount, 0, sizeof(int), &numeros[num]);
+			AsignarParametro (entorno.kernelCount, 1, sizeof(size_t), &wi);
+			AsignarParametro (entorno.kernelCount, 2, sizeof(cl_mem), &A_buffer);
+			AsignarParametro (entorno.kernelCount, 3, sizeof(cl_mem), &app_buffer);
+
+			EjecutarKernel(entorno.cola, entorno.kernelCount, 1, NULL, &real_wi, &wi_x_wg, 0, NULL, e_ejec_countAppareances);
+			clFinish(entorno.cola);
+
+			cl_mem data_buffer, total_buffer;
+
+			CrearBuffer(entorno.contexto, CL_MEM_USE_HOST_PTR, sizeof(int), &total_data_size, total_buffer);
+
+			AsignarParametro (entorno.kernelTam, 0, sizeof(cl_mem), &app_buffer);
+			AsignarParametro (entorno.kernelTam, 1, sizeof(cl_mem), &total_buffer);
+
+			EjecutarKernel(entorno.cola, entorno.kernelTam, 1, NULL, &wg, &wg, 0, NULL, e_ejec_tam);
+			clFinish(entorno.cola);
+
+
+			data_per_wg = (int*) malloc(total_data_size * sizeof(int));
+
+			CrearBuffer(entorno.contexto, CL_MEM_USE_HOST_PTR, total_data_size, data_per_wg, data_buffer);
+
+			AsignarParametro (entorno.kernelGet, 0, sizeof(int), &numeros[num]);
+			AsignarParametro (entorno.kernelGet, 1, sizeof(size_t), &wi);
+			AsignarParametro (entorno.kernelGet, 2, sizeof(cl_mem), &A_buffer);
+			AsignarParametro (entorno.kernelGet, 3, sizeof(cl_mem), &app_buffer);
+			AsignarParametro (entorno.kernelGet, 4, sizeof(cl_mem), &data_buffer);
+
+			EjecutarKernel(entorno.cola, entorno.kernelGet, 1, NULL, &real_wi, &wi_x_wg, 0, NULL, e_ejec_get);
+			clFinish(entorno.cola);
+
+
+			int mejor = 0;
+			size_t mejor_wg_size = 256;
+			size_t mej_wg = total_data_size;
+
+			if(total_data_size < mejor_wg_size){
+				cl_mem mejor_buffer;
+
+				CrearBuffer(entorno.contexto, CL_MEM_USE_HOST_PTR, sizeof(int), &mejor, mejor_buffer);
+
+				AsignarParametro (entorno.kernelMej, 0, sizeof(int), &N);
+				AsignarParametro (entorno.kernelMej, 1, sizeof(int), &total_data_size);
+				AsignarParametro (entorno.kernelMej, 2, sizeof(cl_mem), &data_buffer);
+				AsignarParametro (entorno.kernelMej, 3, sizeof(cl_mem), &mejor_buffer);
+
+				EjecutarKernel(entorno.cola, entorno.kernelMej, 1, NULL, &mej_wg, &mej_wg, 0, NULL, e_ejec_mejores);
+				clFinish(entorno.cola);
+			} else {
+				size_t mejores_wg = ceil(total_data_size * 1.0 / mejor_wg_size);
+				size_t w_total = mejores_wg * mejor_wg_size;
+				size_t mejores_size = sizeof(int) * mejores_wg;
+				int* mejores = (int*) malloc(mejores_size);
+				cl_mem mejor_buffer;
+
+				CrearBuffer(entorno.contexto, CL_MEM_USE_HOST_PTR, mejores_size, mejores, mejor_buffer);
+				AsignarParametro (entorno.kernelMej, 0, sizeof(int), &N);
+				AsignarParametro (entorno.kernelMej, 1, sizeof(int), &total_data_size);
+				AsignarParametro (entorno.kernelMej, 2, sizeof(cl_mem), &data_buffer);
+				AsignarParametro (entorno.kernelMej, 3, sizeof(cl_mem), &mejor_buffer);
+				EjecutarKernel(entorno.cola, entorno.kernelMej, 1, NULL, &w_total, &mejor_wg_size, 0, NULL, e_ejec_mejores);
+				clFinish(entorno.cola);
+
+				for (int i = 0; i < mejores_wg ; i++){
+					if(mejor < mejores[i]) mejor = mejores[i];
+				}
+			}
+
+			distancias[num] = mejor;
+		}
+	}
+
+	for(int num = 0; num < n; num++){
+		int worker  = (num % (size - 1)) +1;
+		if(myrank == 0){
+			MPI_Recv(&distancias[num], 1, MPI_INT, worker, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+		} else if (myrank == worker){
+			MPI_Send(&distancias[num], 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
+		}
+
+	}
+
+
 
 }
 // **************************************************************************
-// *************************** FIN IMPLEMENTACIÓN ***************************
+// *************************** FIN IMPLEMENTACIï¿½N ***************************
 // **************************************************************************
 
+
 /*
-Recibirá los siguientes parámetros (los parámetros entre corchetes son opcionales): fichEntrada [-d] [-wi work_items] [-wi_wg workitems_por_workgroup]
-fichEntrada -> Obligatorio. Fichero de entrada con los parámetros de lanzamiento de los experimentos
--d -> Opcional. Si se indica, se mostrarán por pantalla los valores iniciales, finales y tiempo de cada experimento
--wi work_items -> Opcional. Si se indica, se lanzarán tantos work items como se indique en work_items (para OpenCL)
--wi_wg workitems_por_workgroup -> Opcional. Si se indica, se lanzarán tantos work items en cada work group como se indique en WorkItems_por_WorkGroup (para OpenCL)
+Recibirï¿½ los siguientes parï¿½metros (los parï¿½metros entre corchetes son opcionales): fichEntrada [-d] [-wi work_items] [-wi_wg workitems_por_workgroup]
+fichEntrada -> Obligatorio. Fichero de entrada con los parï¿½metros de lanzamiento de los experimentos
+-d -> Opcional. Si se indica, se mostrarï¿½n por pantalla los valores iniciales, finales y tiempo de cada experimento
+-wi work_items -> Opcional. Si se indica, se lanzarï¿½n tantos work items como se indique en work_items (para OpenCL)
+-wi_wg workitems_por_workgroup -> Opcional. Si se indica, se lanzarï¿½n tantos work items en cada work group como se indique en WorkItems_por_WorkGroup (para OpenCL)
 */
 int main(int argc,char *argv[]) {
 	int i,j,
 		debug=0,				   // Indica si se desean mostrar los tiempos y resultados parciales de los experimentos
-		num_workitems=0, 		   // Número de work items que se utilizarán
-		workitems_por_workgroups=0, // Número de work items por cada work group que se utilizarán
-		N,					   // Tamaño de la matriz A (NxN)
-		cuantos,				   // Número de experimentos
-		n,					   // Número de enteros a leer del fichero
-		semilla,				   // Semilla para la generación de números aleatorios
-		maximo,				   // Valor máximo de para la generación de valores aleatorios de la matriz A (se generan entre 0 y maximo-1)
+		num_workitems=0, 		   // Nï¿½mero de work items que se utilizarï¿½n
+		workitems_por_workgroups=0, // Nï¿½mero de work items por cada work group que se utilizarï¿½n
+		N,					   // Tamaï¿½o de la matriz A (NxN)
+		cuantos,				   // Nï¿½mero de experimentos
+		n,					   // Nï¿½mero de enteros a leer del fichero
+		semilla,				   // Semilla para la generaciï¿½n de nï¿½meros aleatorios
+		maximo,				   // Valor mï¿½ximo de para la generaciï¿½n de valores aleatorios de la matriz A (se generan entre 0 y maximo-1)
 		*A,					   // Matriz A. Se representa en forma de vector. Para acceder a la fila f y la columna c: A[f*N+c]
-		*numeros,				   // Vector que contiene los números de los que se calcularán las distancias
+		*numeros,				   // Vector que contiene los nï¿½meros de los que se calcularï¿½n las distancias
 		*distancias,			   // Vector resultado conteniendo las distancias calculadas
 		myrank,				   // Identificador del proceso
-		size;				   // Número de procesos lanzados
+		size;				   // Nï¿½mero de procesos lanzados
 	long long ti,				   // Tiempo inicial
 			tf,				   // Tiempo final
 			tt=0; 			   // Tiempo acumulado de los tiempos parciales de todos los experimentos realizados
@@ -150,7 +297,7 @@ int main(int argc,char *argv[]) {
 	EntornoOCL_t entorno; 		   //Entorno para el control de OpenCL
 
 	if (!ObtenerParametros(argc, argv, &debug, &num_workitems, &workitems_por_workgroups)) {
-		printf("Ejecución incorrecta\nEl formato correcto es %s fichEntrada [-d] [-wi work_items] [-wi_wg workitems_por_workgroup]\n", argv[0]);
+		printf("Ejecuciï¿½n incorrecta\nEl formato correcto es %s fichEntrada [-d] [-wi work_items] [-wi_wg workitems_por_workgroup]\n", argv[0]);
 		return 0;
 	}
 
@@ -160,38 +307,46 @@ int main(int argc,char *argv[]) {
 
 	InicializarEntornoOCL(&entorno);
 
-	// Se leen el número de experimentos a realizar
-	if(myrank==0) { // Sólo el proceso 0 tiene acceso al fichero y, por tanto, a los datos
+	// Se leen el nï¿½mero de experimentos a realizar
+	if(myrank==0) { // Sï¿½lo el proceso 0 tiene acceso al fichero y, por tanto, a los datos
 		f=fopen(argv[1],"r");
 		fscanf(f, "%d",&cuantos);
 	}
 
 	ti=mseconds(); 
 // **************************************************************************
-// ***************************** IMPLEMENTACIÓN *****************************
+// ***************************** IMPLEMENTACIï¿½N *****************************
 // **************************************************************************
 
-	// Se debe enviar el número de experimentos a todos los procesos 
-	
+	// Se debe enviar el nï¿½mero de experimentos a todos los procesos 
+	MPI_Bcast(&cuantos, 1, MPI_INT, 0, MPI_COMM_WORLD);
 // **************************************************************************
-// *************************** FIN IMPLEMENTACIÓN ***************************
+// *************************** FIN IMPLEMENTACIï¿½N ***************************
 // **************************************************************************
 	tf=mseconds(); 
 	tt+=tf-ti;
 
 	for(i=0;i<cuantos;i++)
 	{
-		if(myrank==0) { // Sólo el proceso 0 tiene acceso al fichero y, por tanto, a los datos
+		//Reserva de memoria para la matriz, las distancias y los nï¿½meros
+		if(myrank==0) { // Sï¿½lo el proceso 0 tiene acceso al fichero y, por tanto, a los datos
 			//Por cada experimento se leen
-			fscanf(f, "%d",&N);			//El tamaño de la matriz (NxN)
-			fscanf(f, "%d",&semilla);	//La semilla para la generación de números aleatorios
-			fscanf(f, "%d",&maximo);		//El valor máximo de para la generación de valores aleatorios de la matriz A (se generan entre 0 y maximo-1)
-			fscanf(f, "%d",&n);			//El número de enteros a leer del fichero
-			//Reserva de memoria para la matriz, las distancias y los números
-			A = (int *) malloc(sizeof(int)*N*N);
-			distancias=(int *) malloc(sizeof(int)*n);
-			numeros = (int *) malloc(sizeof(int)*n);
-			//Lectura de los números
+			fscanf(f, "%d",&N);			//El tamaï¿½o de la matriz (NxN)
+			fscanf(f, "%d",&semilla);	//La semilla para la generaciï¿½n de nï¿½meros aleatorios
+			fscanf(f, "%d",&maximo);		//El valor mï¿½ximo de para la generaciï¿½n de valores aleatorios de la matriz A (se generan entre 0 y maximo-1)
+			fscanf(f, "%d",&n);			//El nï¿½mero de enteros a leer del fichero
+		}
+
+		MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
+		MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
+		MPI_Barrier(MPI_COMM_WORLD);
+		A = (int *) malloc(sizeof(int)*N*N);
+		distancias=(int *) malloc(sizeof(int)*n);
+		numeros = (int *) malloc(sizeof(int)*n);
+		MPI_Barrier(MPI_COMM_WORLD);
+
+		if(myrank == 0){
+			//Lectura de los nï¿½meros
 			for(j=0;j<n;j++) {
 				fscanf(f, "%d",&numeros[j]);
 			}
@@ -201,39 +356,51 @@ int main(int argc,char *argv[]) {
 			
 			if (debug)	{
 				printf("Matriz del experimento %d:\n", i); escribir(A,N);
-				printf("Números del experimento %d:\n", i);escribirresult(numeros,n);
+				printf("Nï¿½meros del experimento %d:\n", i);escribirresult(numeros,n);
 			}
 		}
-		
+
+		MPI_Bcast(&numeros[0], n, MPI_INT, 0, MPI_COMM_WORLD);
+		MPI_Bcast(&A[0], N*N, MPI_INT, 0, MPI_COMM_WORLD);
+
 		ti=mseconds(); 
 // **************************************************************************
-// ***************************** IMPLEMENTACIÓN *****************************
+// ***************************** IMPLEMENTACIï¿½N *****************************
 // **************************************************************************
 
-		// Deberán crearse las estructuras que se consideren necesarias para almacenar las partes de la información de cada proceso
-		// El proceso 0 debe repartir la información a procesar entre todos los procesos (incluido él mismo)
+		// Deberï¿½n crearse las estructuras que se consideren necesarias para almacenar las partes de la informaciï¿½n de cada proceso
+		// El proceso 0 debe repartir la informaciï¿½n a procesar entre todos los procesos (incluido ï¿½l mismo)
 		
-		ocl(/*Deben usarse los parámetros correspondientes a la parte de la información a procesar por cada proceso*/);
+		ocl(N,A,n,numeros,distancias,entorno);
 
-		// El proceso 0 debe recolectar la información procesada por todos los procesos (incluida la suya)
-		// Deberán liberarse todas las estructuras creadas para almacenar las partes de la información de cada proceso
-		
+		// El proceso 0 debe recolectar la informaciï¿½n procesada por todos los procesos (incluida la suya)
+		// Deberï¿½n liberarse todas las estructuras creadas para almacenar las partes de la informaciï¿½n de cada proceso
+
 // **************************************************************************
-// *************************** FIN IMPLEMENTACIÓN ***************************
+// *************************** FIN IMPLEMENTACIï¿½N ***************************
 // **************************************************************************
 		tf=mseconds(); 
 		tt+=tf-ti;
 		
+
+
+		
 		if (myrank==0){
+			printf("Tiempo del experimento %d: %Ld ms\n", i, tf-ti);
 			if (debug)	{
-				printf("Tiempo del experimento %d: %Ld ms\n", i, tf-ti);
 				printf("Resultado del experimento %d:\n", i); escribirresult(distancias,n);
 			}
+	
 
-			free(A);
-			free(numeros);
-			free(distancias);
 		}
+
+		free(A);
+		free(numeros);
+		free(distancias);
+
+		MPI_Barrier(MPI_COMM_WORLD);
+
+
 	}
 
 	LiberarEntornoOCL(&entorno);

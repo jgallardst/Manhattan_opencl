@@ -313,9 +313,9 @@ int main(int argc,char *argv[]) {
 		ocl(N,A,n,numeros,distancias,entorno);
 		tf=mseconds(); 
 		tt+=tf-ti;
+		printf("Tiempo del experimento %d: %Ld ms\n", i, tf-ti);
 
 		if (debug)	{
-			printf("Tiempo del experimento %d: %Ld ms\n", i, tf-ti);
 			printf("Resultado del experimento %d:\n", i); escribirresult(distancias,n);
 		}
 
